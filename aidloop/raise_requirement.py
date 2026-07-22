@@ -1,7 +1,7 @@
+import base64
 import math
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from db import insert_requirement
 
@@ -82,13 +82,12 @@ with st.form("raise_form", clear_on_submit=True):
 if st.session_state[_LOC_STEP] == "waiting":
 
     # Check if the geolocation JS stored coordinates in query params
-    # (from a page reload triggered by the JS inside components.html)
+    # (from a page reload triggered by the JS inside the iframe)
     url_lat = st.query_params.get("lat")
     url_lng = st.query_params.get("lng")
     url_error = st.query_params.get("geo_err")
 
     if url_lat is not None and url_lng is not None:
-        # Location received via URL params set by JS page reload
         try:
             user_lat = float(url_lat)
             user_lng = float(url_lng)
@@ -117,32 +116,42 @@ if st.session_state[_LOC_STEP] == "waiting":
         st.rerun()
 
     else:
-        # ── Show location request via components.html (keeps JS alive) ─
+        # ── Show location request via a non-sandboxed iframe ───────────
         st.info("📍 **Verifying your location…** Please allow location access when prompted by your browser.")
 
-        LOCATION_HTML = """<div id="status" style="text-align:center;padding:24px;font-size:18px;color:#555;">
-  Requesting your location…
-</div>
-<script>
-navigator.geolocation.getCurrentPosition(
-  function (pos) {
-    // Write coordinates to the parent's URL and reload the page
-    // Streamlit will pick them up from st.query_params on next load
-    var params = new URLSearchParams(window.parent.location.search);
-    params.set('lat', pos.coords.latitude);
-    params.set('lng', pos.coords.longitude);
-    window.parent.location.search = params.toString();
-  },
-  function (err) {
-    var params = new URLSearchParams(window.parent.location.search);
-    params.set('geo_err', err.message);
-    window.parent.location.search = params.toString();
-  },
-  { enableHighAccuracy: true, timeout: 30_000, maximumAge: 0 }
-);
-</script>"""
+        # Build the geolocation HTML as a data URI so it loads in an iframe
+        # created by st.markdown (NOT components.html, which sandboxes the iframe
+        # and blocks geolocation).
+        geo_html = """<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:16px;font-family:sans-serif;text-align:center;">
+  <p id="status" style="font-size:14px;color:#555;">📍 Requesting your location…</p>
+  <script>
+  navigator.geolocation.getCurrentPosition(
+    function (pos) {
+      var params = new URLSearchParams(window.parent.location.search);
+      params.set('lat', pos.coords.latitude);
+      params.set('lng', pos.coords.longitude);
+      window.parent.location.search = params.toString();
+    },
+    function (err) {
+      var params = new URLSearchParams(window.parent.location.search);
+      params.set('geo_err', err.message);
+      window.parent.location.search = params.toString();
+    },
+    { enableHighAccuracy: true, timeout: 30_000, maximumAge: 0 }
+  );
+  </script>
+</body>
+</html>"""
 
-        components.html(LOCATION_HTML, height=100)
+        b64 = base64.b64encode(geo_html.encode()).decode()
+        data_uri = f"data:text/html;base64,{b64}"
+
+        st.markdown(
+            f'<iframe src="{data_uri}" width="100%" height="80" style="border:none;" allow="geolocation"></iframe>',
+            unsafe_allow_html=True,
+        )
 
 
 # ── Location denied → show error ──────────────────────────────────────

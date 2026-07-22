@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Geolocation</title>
+</head>
+<body style="margin:0;padding:16px;font-family:sans-serif;text-align:center;">
+  <p id="status" style="font-size:14px;color:#555;">📍 Requesting your location…</p>
+  <button id="btn" onclick="getLocation()"
+    style="padding:10px 20px;font-size:16px;background:#2563eb;color:white;border:none;border-radius:6px;cursor:pointer;">
+    📍 Share My Location
+  </button>
+
+  <script>
+  function setStatus(msg) {
+    document.getElementById('status').innerText = msg;
+  }
+
+  function getLocation() {
+    setStatus('Requesting location...');
+    navigator.geolocation.getCurrentPosition(
+      function (pos) {
+        var lat = pos.coords.latitude;
+        var lng = pos.coords.longitude;
+        // Tell the parent page to store the result
+        parent.postMessage({
+          type: 'geo-result',
+          lat: lat,
+          lng: lng,
+          error: null
+        }, '*');
+        setStatus('✅ Location obtained. Returning to app...');
+      },
+      function (err) {
+        parent.postMessage({
+          type: 'geo-result',
+          lat: null,
+          lng: null,
+          error: err.message
+        }, '*');
+        setStatus('❌ ' + err.message);
+      },
+      { enableHighAccuracy: true, timeout: 30_000, maximumAge: 0 }
+    );
+  }
+
+  // Auto-request on page load
+  getLocation();
+  </script>
+</body>
+</html>
