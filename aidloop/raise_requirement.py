@@ -1,5 +1,7 @@
-import base64
 import math
+import urllib.request
+import urllib.error
+import json
 
 import streamlit as st
 
@@ -26,12 +28,35 @@ def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
+def _get_ip_location() -> dict | None:
+    """Look up the user's approximate location via ip-api.com (free, no key)."""
+    try:
+        req = urllib.request.Request(
+            "http://ip-api.com/json/?fields=status,lat,lon,city,regionName,country",
+            headers={"User-Agent": "AidLoop/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+            if data.get("status") == "success":
+                return {
+                    "lat": data["lat"],
+                    "lng": data["lon"],
+                    "city": data.get("city", ""),
+                    "region": data.get("regionName", ""),
+                    "country": data.get("country", ""),
+                }
+    except (urllib.error.URLError, json.JSONDecodeError, KeyError):
+        pass
+    return None
+
+
 # ── Session-state keys ─────────────────────────────────────────────────
 _LOC_STEP = "raise_loc_step"  # idle | waiting | verified | denied
 _LOC_LAT = "raise_loc_lat"
 _LOC_LNG = "raise_loc_lng"
 _LOC_DIST = "raise_loc_dist"
 _LOC_ERR = "raise_loc_err"
+_LOC_DATA = "raise_geo_data"
 
 if _LOC_STEP not in st.session_state:
     st.session_state[_LOC_STEP] = "idle"
@@ -80,76 +105,36 @@ with st.form("raise_form", clear_on_submit=True):
 
 # ── Location verification (runs after form submit) ─────────────────────
 if st.session_state[_LOC_STEP] == "waiting":
+    st.info("📍 **Verifying your approximate location via IP lookup…**")
 
-    # Check if the geolocation JS stored coordinates in query params
-    # (from a page reload triggered by the JS inside the iframe)
-    url_lat = st.query_params.get("lat")
-    url_lng = st.query_params.get("lng")
-    url_error = st.query_params.get("geo_err")
-
-    if url_lat is not None and url_lng is not None:
-        try:
-            user_lat = float(url_lat)
-            user_lng = float(url_lng)
-        except (ValueError, TypeError):
-            st.error("Invalid location data received.")
-        else:
-            dist = _haversine_km(JANTAR_MANTAR_LAT, JANTAR_MANTAR_LNG, user_lat, user_lng)
-            st.session_state[_LOC_LAT] = user_lat
-            st.session_state[_LOC_LNG] = user_lng
-            st.session_state[_LOC_DIST] = round(dist, 2)
-            if dist <= MAX_DISTANCE_KM:
-                st.session_state[_LOC_STEP] = "verified"
-            else:
-                st.session_state[_LOC_STEP] = "denied"
-                st.session_state[_LOC_ERR] = (
-                    f"You are **{dist:.1f} km** from Jantar Mantar, "
-                    f"which is outside the **{MAX_DISTANCE_KM} km** allowed range."
-                )
-        st.query_params.clear()
+    if _LOC_DATA in st.session_state:
+        st.session_state[_LOC_STEP] = "verified" if st.session_state.get(_LOC_DIST, 0) <= MAX_DISTANCE_KM else "denied"
         st.rerun()
 
-    elif url_error is not None:
+    with st.spinner("Looking up your location…"):
+        geo = _get_ip_location()
+
+    if geo is None:
         st.session_state[_LOC_STEP] = "denied"
-        st.session_state[_LOC_ERR] = url_error
-        st.query_params.clear()
+        st.session_state[_LOC_ERR] = "Could not determine your location via IP lookup."
         st.rerun()
 
+    dist = _haversine_km(JANTAR_MANTAR_LAT, JANTAR_MANTAR_LNG, geo["lat"], geo["lng"])
+    st.session_state[_LOC_DATA] = geo
+    st.session_state[_LOC_LAT] = geo["lat"]
+    st.session_state[_LOC_LNG] = geo["lng"]
+    st.session_state[_LOC_DIST] = round(dist, 2)
+
+    if dist <= MAX_DISTANCE_KM:
+        st.session_state[_LOC_STEP] = "verified"
     else:
-        # ── Show location request via a non-sandboxed iframe ───────────
-        st.info("📍 **Verifying your location…** Please allow location access when prompted by your browser.")
-
-        # Build the geolocation HTML as a data URI so it loads in an iframe
-        # created by st.markdown (NOT components.html, which sandboxes the iframe
-        # and blocks geolocation).
-        geo_html = """<!DOCTYPE html>
-<html>
-<body style="margin:0;padding:16px;font-family:sans-serif;text-align:center;">
-  <p id="status" style="font-size:14px;color:#555;">📍 Requesting your location…</p>
-  <script>
-  navigator.geolocation.getCurrentPosition(
-    function (pos) {
-      top.location.href = top.location.pathname
-        + '?lat=' + pos.coords.latitude
-        + '&lng=' + pos.coords.longitude;
-    },
-    function (err) {
-      top.location.href = top.location.pathname
-        + '?geo_err=' + encodeURIComponent(err.message);
-    },
-    { enableHighAccuracy: true, timeout: 30_000, maximumAge: 0 }
-  );
-  </script>
-</body>
-</html>"""
-
-        b64 = base64.b64encode(geo_html.encode()).decode()
-        data_uri = f"data:text/html;base64,{b64}"
-
-        st.markdown(
-            f'<iframe src="{data_uri}" width="100%" height="80" style="border:none;" allow="geolocation"></iframe>',
-            unsafe_allow_html=True,
+        st.session_state[_LOC_STEP] = "denied"
+        st.session_state[_LOC_ERR] = (
+            f"You appear to be in **{geo['city']}, {geo['region']}** — "
+            f"**{dist:.1f} km** from Jantar Mantar, "
+            f"which is outside the **{MAX_DISTANCE_KM} km** allowed range."
         )
+    st.rerun()
 
 
 # ── Location denied → show error ──────────────────────────────────────
@@ -159,22 +144,20 @@ if st.session_state[_LOC_STEP] == "denied":
 
     err_msg = st.session_state.get(_LOC_ERR, "")
     if "km" in err_msg:
-        st.warning(
-            f"You are **{st.session_state.get(_LOC_DIST, '?')} km** "
-            f"from Jantar Mantar. You need to be within **{MAX_DISTANCE_KM} km** "
-            "to raise a requirement."
+        st.warning(err_msg)
+        st.markdown(
+            "You need to be within **5 km of Jantar Mantar** to raise a requirement.",
         )
     else:
         st.warning(
-            "We need proof that you are in the nearby protest area so that we can "
-            "prevent misuse. Please enable location access in your browser settings "
-            "and try again."
+            "We couldn't verify your location. This is needed to prevent misuse. "
+            "Please check your internet connection and try again."
         )
 
     col1, col2 = st.columns(2)
     if col1.button("🔄 Try Again", use_container_width=True):
         st.session_state[_LOC_STEP] = "idle"
-        st.query_params.clear()
+        st.session_state.pop(_LOC_DATA, None)
         st.rerun()
     if col2.button("🏠 Go Home"):
         st.switch_page("home.py")
@@ -199,4 +182,5 @@ if st.session_state[_LOC_STEP] == "verified":
 
     # Reset for next time
     st.session_state[_LOC_STEP] = "idle"
+    st.session_state.pop(_LOC_DATA, None)
     st.rerun()
