@@ -1,6 +1,7 @@
 import math
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from db import insert_requirement
 
@@ -74,21 +75,20 @@ with st.form("raise_form", clear_on_submit=True):
             st.session_state["raise_form_item"] = item_name
             st.session_state["raise_form_qty"] = quantity
             st.session_state["raise_form_name"] = raiser_name
-            # Clear any previous location from URL
-            st.query_params.clear()
             st.rerun()
 
 
 # ── Location verification (runs after form submit) ─────────────────────
 if st.session_state[_LOC_STEP] == "waiting":
 
-    # Check if the geolocation JS has already set coordinates in the URL
+    # Check if the geolocation JS stored coordinates in query params
+    # (from a page reload triggered by the JS inside components.html)
     url_lat = st.query_params.get("lat")
     url_lng = st.query_params.get("lng")
     url_error = st.query_params.get("geo_err")
 
     if url_lat is not None and url_lng is not None:
-        # Location received via URL params
+        # Location received via URL params set by JS page reload
         try:
             user_lat = float(url_lat)
             user_lng = float(url_lng)
@@ -117,54 +117,32 @@ if st.session_state[_LOC_STEP] == "waiting":
         st.rerun()
 
     else:
-        # ── Show the geolocation button + JS ──────────────────────────
-        st.info("📍 **Location verification required.** Allow location access to continue.")
+        # ── Show location request via components.html (keeps JS alive) ─
+        st.info("📍 **Verifying your location…** Please allow location access when prompted by your browser.")
 
-        st.markdown(
-            """
-        <button id="geo-btn" onclick="getLocation()"
-          style="
-            display:block;
-            margin:0 auto;
-            padding:12px 28px;
-            font-size:18px;
-            font-weight:600;
-            border:none;
-            border-radius:8px;
-            background:#2563eb;
-            color:white;
-            cursor:pointer;
-          ">
-          📍 Share My Location
-        </button>
+        LOCATION_HTML = """<div id="status" style="text-align:center;padding:24px;font-size:18px;color:#555;">
+  Requesting your location…
+</div>
+<script>
+navigator.geolocation.getCurrentPosition(
+  function (pos) {
+    // Write coordinates to the parent's URL and reload the page
+    // Streamlit will pick them up from st.query_params on next load
+    var params = new URLSearchParams(window.parent.location.search);
+    params.set('lat', pos.coords.latitude);
+    params.set('lng', pos.coords.longitude);
+    window.parent.location.search = params.toString();
+  },
+  function (err) {
+    var params = new URLSearchParams(window.parent.location.search);
+    params.set('geo_err', err.message);
+    window.parent.location.search = params.toString();
+  },
+  { enableHighAccuracy: true, timeout: 30_000, maximumAge: 0 }
+);
+</script>"""
 
-        <p id="geo-status" style="text-align:center;color:#888;margin-top:10px;">
-          Click the button above to verify your location.
-        </p>
-
-        <script>
-        function getLocation() {
-          document.getElementById('geo-status').innerText = 'Requesting location...';
-          navigator.geolocation.getCurrentPosition(
-            function (pos) {
-              // Store location in the URL so Streamlit can read it on next page load
-              var params = new URLSearchParams(window.location.search);
-              params.set('lat', pos.coords.latitude);
-              params.set('lng', pos.coords.longitude);
-              window.location.search = params.toString();
-            },
-            function (err) {
-              var params = new URLSearchParams(window.location.search);
-              params.set('geo_err', err.message);
-              window.location.search = params.toString();
-            },
-            { enableHighAccuracy: true, timeout: 20_000, maximumAge: 0 }
-          );
-        }
-        </script>
-            """,
-            unsafe_allow_html=True,
-        )
+        components.html(LOCATION_HTML, height=100)
 
 
 # ── Location denied → show error ──────────────────────────────────────
