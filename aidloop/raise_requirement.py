@@ -1,186 +1,132 @@
-import math
-import urllib.request
-import urllib.error
-import json
-
 import streamlit as st
-
 from db import insert_requirement
+from supabase import create_client
 
-# ── Jantar Mantar (New Delhi) ──────────────────────────────────────────
-JANTAR_MANTAR_LAT = 28.6272
-JANTAR_MANTAR_LNG = 77.2165
-MAX_DISTANCE_KM = 5.0
-
-
-# ── Helpers ────────────────────────────────────────────────────────────
-def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-    """Great-circle distance in km between two GPS coordinates."""
-    R = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlng = math.radians(lng2 - lng1)
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(math.radians(lat1))
-        * math.cos(math.radians(lat2))
-        * math.sin(dlng / 2) ** 2
-    )
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
+ALLOWED_TYPES = {"png", "jpg", "jpeg"}
+STORAGE_BUCKET = "proof-image"
 
 
-def _get_ip_location() -> dict | None:
-    """Look up the user's approximate location via ip-api.com (free, no key)."""
-    try:
-        req = urllib.request.Request(
-            "http://ip-api.com/json/?fields=status,lat,lon,city,regionName,country",
-            headers={"User-Agent": "AidLoop/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-            if data.get("status") == "success":
-                return {
-                    "lat": data["lat"],
-                    "lng": data["lon"],
-                    "city": data.get("city", ""),
-                    "region": data.get("regionName", ""),
-                    "country": data.get("country", ""),
-                }
-    except (urllib.error.URLError, json.JSONDecodeError, KeyError):
-        pass
-    return None
+def get_supabase_storage():
+    """Return a Supabase Storage client."""
+    url = st.secrets["supabase_url"]
+    key = st.secrets["supabase_key"]
+    client = create_client(url, key)
+    return client.storage.from_(STORAGE_BUCKET)
 
 
-# ── Session-state keys ─────────────────────────────────────────────────
-_LOC_STEP = "raise_loc_step"  # idle | waiting | verified | denied
-_LOC_LAT = "raise_loc_lat"
-_LOC_LNG = "raise_loc_lng"
-_LOC_DIST = "raise_loc_dist"
-_LOC_ERR = "raise_loc_err"
-_LOC_DATA = "raise_geo_data"
-
-if _LOC_STEP not in st.session_state:
-    st.session_state[_LOC_STEP] = "idle"
-
-
-# ── Page header ────────────────────────────────────────────────────────
 st.title("🙋 Raise a Requirement")
 st.markdown("Post what's needed on the ground — food, water, medicine, daily essentials.")
 
+# ── Session-state keys for the upload/verify flow ──────────────────────
+_STEP = "raise_step"          # form | uploading | done
+_PENDING_ITEM = "raise_item"
+_PENDING_QTY = "raise_qty"
+_PENDING_NAME = "raise_name"
+_PENDING_PHOTO = "raise_photo"
 
-# ── The requirement form ───────────────────────────────────────────────
-with st.form("raise_form", clear_on_submit=True):
-    item_name = st.text_input(
-        "Item name *",
-        placeholder="e.g. Bottled water, packaged rice, face masks",
-    )
-    quantity = st.text_input(
-        "Quantity *",
-        placeholder="e.g. 50, 20 kg, 10 boxes",
-    )
-    raiser_name = st.text_input(
-        "Your name (optional)",
-        placeholder="Anonymous if left blank",
-    )
-
-    submitted = st.form_submit_button("📤 Submit Requirement", use_container_width=True)
-
-    if submitted:
-        errors = []
-        if not item_name or not item_name.strip():
-            errors.append("Item name is required.")
-        if not quantity or not quantity.strip():
-            errors.append("Quantity is required.")
-
-        if errors:
-            for err in errors:
-                st.error(err)
-        else:
-            # ── Start location verification ────────────────────────────
-            st.session_state[_LOC_STEP] = "waiting"
-            st.session_state["raise_form_item"] = item_name
-            st.session_state["raise_form_qty"] = quantity
-            st.session_state["raise_form_name"] = raiser_name
-            st.rerun()
+if _STEP not in st.session_state:
+    st.session_state[_STEP] = "form"
 
 
-# ── Location verification (runs after form submit) ─────────────────────
-if st.session_state[_LOC_STEP] == "waiting":
-    st.info("📍 **Verifying your approximate location via IP lookup…**")
+# ── Step 1: Requirement form ──────────────────────────────────────────
+if st.session_state[_STEP] == "form":
 
-    if _LOC_DATA in st.session_state:
-        st.session_state[_LOC_STEP] = "verified" if st.session_state.get(_LOC_DIST, 0) <= MAX_DISTANCE_KM else "denied"
-        st.rerun()
-
-    with st.spinner("Looking up your location…"):
-        geo = _get_ip_location()
-
-    if geo is None:
-        st.session_state[_LOC_STEP] = "denied"
-        st.session_state[_LOC_ERR] = "Could not determine your location via IP lookup."
-        st.rerun()
-
-    dist = _haversine_km(JANTAR_MANTAR_LAT, JANTAR_MANTAR_LNG, geo["lat"], geo["lng"])
-    st.session_state[_LOC_DATA] = geo
-    st.session_state[_LOC_LAT] = geo["lat"]
-    st.session_state[_LOC_LNG] = geo["lng"]
-    st.session_state[_LOC_DIST] = round(dist, 2)
-
-    if dist <= MAX_DISTANCE_KM:
-        st.session_state[_LOC_STEP] = "verified"
-    else:
-        st.session_state[_LOC_STEP] = "denied"
-        st.session_state[_LOC_ERR] = (
-            f"You appear to be in **{geo['city']}, {geo['region']}** — "
-            f"**{dist:.1f} km** from Jantar Mantar, "
-            f"which is outside the **{MAX_DISTANCE_KM} km** allowed range."
+    with st.form("raise_form", clear_on_submit=True):
+        item_name = st.text_input(
+            "Item name *",
+            placeholder="e.g. Bottled water, packaged rice, face masks",
         )
-    st.rerun()
-
-
-# ── Location denied → show error ──────────────────────────────────────
-if st.session_state[_LOC_STEP] == "denied":
-
-    st.error("❌ **Location verification failed**")
-
-    err_msg = st.session_state.get(_LOC_ERR, "")
-    if "km" in err_msg:
-        st.warning(err_msg)
-        st.markdown(
-            "You need to be within **5 km of Jantar Mantar** to raise a requirement.",
+        quantity = st.text_input(
+            "Quantity *",
+            placeholder="e.g. 50, 20 kg, 10 boxes",
         )
-    else:
-        st.warning(
-            "We couldn't verify your location. This is needed to prevent misuse. "
-            "Please check your internet connection and try again."
+        raiser_name = st.text_input(
+            "Your name (optional)",
+            placeholder="Anonymous if left blank",
+        )
+        proof_file = st.file_uploader(
+            "Upload a photo of location for proof*",
+            type=list(ALLOWED_TYPES),
+            help="Take a picture of the situation on the ground. Max 5 MB.",
         )
 
-    col1, col2 = st.columns(2)
-    if col1.button("🔄 Try Again", use_container_width=True):
-        st.session_state[_LOC_STEP] = "idle"
-        st.session_state.pop(_LOC_DATA, None)
-        st.rerun()
-    if col2.button("🏠 Go Home"):
-        st.switch_page("home.py")
+        submitted = st.form_submit_button("📤 Submit Requirement", use_container_width=True)
+
+        if submitted:
+            errors = []
+            if not item_name or not item_name.strip():
+                errors.append("Item name is required.")
+            if not quantity or not quantity.strip():
+                errors.append("Quantity is required.")
+            if proof_file is None:
+                errors.append("Proof photo is required — show us the need on the ground.")
+            elif proof_file.size > MAX_FILE_SIZE:
+                errors.append("File is too large. Maximum size is 5 MB.")
+            else:
+                ext = proof_file.name.rsplit(".", 1)[-1].lower() if "." in proof_file.name else ""
+                if ext not in ALLOWED_TYPES:
+                    errors.append("Only PNG, JPG, and JPEG files are allowed.")
+
+            if errors:
+                for err in errors:
+                    st.error(err)
+            else:
+                # Store form data in session state and move to upload step
+                st.session_state[_PENDING_ITEM] = item_name
+                st.session_state[_PENDING_QTY] = quantity
+                st.session_state[_PENDING_NAME] = raiser_name
+                st.session_state[_PENDING_PHOTO] = proof_file
+                st.session_state[_STEP] = "uploading"
+                st.rerun()
 
 
-# ── Location verified → insert requirement ────────────────────────────
-if st.session_state[_LOC_STEP] == "verified":
+# ── Step 2: Upload proof photo to Supabase Storage, then insert ───────
+if st.session_state[_STEP] == "uploading":
+    with st.spinner("Uploading proof photo…"):
+        try:
+            storage = get_supabase_storage()
+            proof_file = st.session_state[_PENDING_PHOTO]
+            import time
+            timestamp = int(time.time() * 1000)
+            dest_filename = f"raiser_{timestamp}_{proof_file.name}"
+            storage.upload(
+                dest_filename,
+                proof_file.getvalue(),
+                {"content-type": proof_file.type or "image/png"},
+            )
+            public_url = storage.get_public_url(dest_filename)
+        except Exception as e:
+            st.error(f"Failed to upload proof photo: {e}")
+            st.session_state[_STEP] = "form"
+            st.stop()
 
-    st.success(
-        f"✅ **Location verified!** You are "
-        f"**{st.session_state.get(_LOC_DIST, '?')} km** "
-        f"from Jantar Mantar — within the allowed range."
+    # Insert requirement with the proof URL
+    item_name = st.session_state[_PENDING_ITEM]
+    quantity = st.session_state[_PENDING_QTY]
+    raiser_name = st.session_state[_PENDING_NAME]
+
+    row_id = insert_requirement(
+        item_name, quantity, raiser_name, raiser_proof_path=public_url
     )
 
-    item_name = st.session_state.get("raise_form_item", "")
-    quantity = st.session_state.get("raise_form_qty", "")
-    raiser_name = st.session_state.get("raise_form_name", "")
-
-    row_id = insert_requirement(item_name, quantity, raiser_name)
     st.success(f"✅ Requirement #{row_id} posted successfully!")
     st.balloons()
 
-    # Reset for next time
-    st.session_state[_LOC_STEP] = "idle"
-    st.session_state.pop(_LOC_DATA, None)
+    # Cleanup and reset
+    for key in [_PENDING_ITEM, _PENDING_QTY, _PENDING_NAME, _PENDING_PHOTO]:
+        st.session_state.pop(key, None)
+    st.session_state[_STEP] = "done"
     st.rerun()
+
+
+# ── Step 3: Done — offer navigation ───────────────────────────────────
+if st.session_state[_STEP] == "done":
+    st.info("Your requirement has been posted. What would you like to do next?")
+    col1, col2 = st.columns(2)
+    if col1.button("🏠 Go Home", use_container_width=True):
+        st.session_state[_STEP] = "form"
+        st.switch_page("home.py")
+    if col2.button("🙋 Raise Another", use_container_width=True):
+        st.session_state[_STEP] = "form"
+        st.rerun()
