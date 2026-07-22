@@ -1,0 +1,26 @@
+# Database
+aidloop.db
+aidloop.db-wal
+aidloop.db-shm
+
+# Uploaded proof images
+uploads/*
+!uploads/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
