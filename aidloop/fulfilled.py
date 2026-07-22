@@ -1,4 +1,3 @@
-import os
 import streamlit as st
 from db import get_fulfilled_requirements
 
@@ -26,12 +25,9 @@ else:
                 st.markdown(f"**Fulfilled on:** {req['fulfilled_at']}")
 
             with col2:
-                # Display the proof image if the file exists
                 proof_path = req["proof_path"]
-                if proof_path and os.path.isfile(proof_path):
-                    st.image(proof_path, caption="Proof of delivery/payment", use_container_width=True)
-                elif proof_path and proof_path.startswith("http"):
-                    # Handle future cloud-based paths
+                if proof_path and proof_path.startswith("http"):
+                    # Supabase public URL
                     st.image(proof_path, caption="Proof of delivery/payment", use_container_width=True)
                 else:
-                    st.warning("📷 Proof image not available (local file may have been removed).")
+                    st.warning("📷 Proof image not available.")

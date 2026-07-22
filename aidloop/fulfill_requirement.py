@@ -1,17 +1,19 @@
 import os
 import streamlit as st
 from db import get_open_requirements, get_requirement_by_id, fulfill_requirement
-
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+from supabase import create_client
 
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 ALLOWED_TYPES = {"png", "jpg", "jpeg"}
+STORAGE_BUCKET = "proof-image"
 
 
-def sanitise_filename(filename: str) -> str:
-    """Strip path separators and keep only the base name."""
-    return os.path.basename(filename)
+def get_supabase_storage():
+    """Return a Supabase Storage client."""
+    url = st.secrets["supabase_url"]
+    key = st.secrets["supabase_key"]
+    client = create_client(url, key)
+    return client.storage.from_(STORAGE_BUCKET)
 
 
 st.title("🤝 Fulfill a Requirement")
@@ -82,16 +84,24 @@ else:
                     for err in errors:
                         st.error(err)
                 else:
-                    # Save the uploaded file
-                    safe_name = sanitise_filename(proof_file.name)
-                    # Prefix with requirement id to avoid name collisions
-                    dest_filename = f"{selected_id}_{safe_name}"
-                    dest_path = os.path.join(UPLOAD_DIR, dest_filename)
-                    with open(dest_path, "wb") as f:
-                        f.write(proof_file.getbuffer())
+                    # Upload to Supabase Storage
+                    try:
+                        storage = get_supabase_storage()
+                        # Use a unique path: req_id / timestamp_filename
+                        dest_filename = f"{selected_id}_{proof_file.name}"
+                        storage.upload(
+                            dest_filename,
+                            proof_file.getvalue(),
+                            {"content-type": proof_file.type or "image/png"},
+                        )
+                        # Get the public URL
+                        public_url = storage.get_public_url(dest_filename)
+                    except Exception as e:
+                        st.error(f"Failed to upload proof image: {e}")
+                        st.stop()
 
-                    # Update DB
-                    success = fulfill_requirement(selected_id, fulfiller_name, dest_path)
+                    # Update DB with the public URL
+                    success = fulfill_requirement(selected_id, fulfiller_name, public_url)
                     if success:
                         st.success(
                             f"✅ Requirement #{selected_id} has been marked as fulfilled! "

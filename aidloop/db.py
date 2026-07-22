@@ -1,93 +1,122 @@
 from __future__ import annotations
 
-import sqlite3
 import os
-from datetime import datetime
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import List, TypedDict, Optional
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "aidloop.db")
+import streamlit as st
+from supabase import create_client, Client
 
 
-def get_connection() -> sqlite3.Connection:
-    """Get a connection to the SQLite database."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+# ── Typed dicts for type hints ────────────────────────────────────────
+class Requirement(TypedDict):
+    id: int
+    item_name: str
+    quantity: str
+    raiser_name: str
+    status: str
+    fulfiller_name: str
+    proof_path: str
+    created_at: str
+    fulfilled_at: str | None
+
+
+# ── Supabase client (lazy init) ───────────────────────────────────────
+_SUPABASE: Optional[Client] = None
+
+
+def _get_client() -> Client:
+    """Return a cached Supabase client."""
+    global _SUPABASE
+    if _SUPABASE is None:
+        url = st.secrets["supabase_url"]
+        key = st.secrets["supabase_key"]
+        _SUPABASE = create_client(url, key)
+    return _SUPABASE
+
+
+# ── Public helpers ────────────────────────────────────────────────────
+
+def _row_to_dict(row) -> dict:
+    """Convert a Supabase response row to a plain dict."""
+    return dict(row)
 
 
 def init_db() -> None:
-    """Create the requirements table if it doesn't exist."""
-    conn = get_connection()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS requirements (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            item_name TEXT NOT NULL,
-            quantity TEXT NOT NULL,
-            raiser_name TEXT DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'open',
-            fulfiller_name TEXT DEFAULT '',
-            proof_path TEXT DEFAULT '',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            fulfilled_at TIMESTAMP
-        )
-    """)
-    conn.commit()
-    conn.close()
+    """No-op — the table is created manually in Supabase via SQL editor."""
+    pass
 
 
 def insert_requirement(item_name: str, quantity: str, raiser_name: str = "") -> int:
     """Insert a new open requirement. Returns the inserted row id."""
-    conn = get_connection()
-    cur = conn.execute(
-        "INSERT INTO requirements (item_name, quantity, raiser_name, status) VALUES (?, ?, ?, 'open')",
-        (item_name.strip(), quantity.strip(), raiser_name.strip()),
-    )
-    conn.commit()
-    row_id = cur.lastrowid
-    conn.close()
-    return row_id
+    client = _get_client()
+    data = {
+        "item_name": item_name.strip(),
+        "quantity": quantity.strip(),
+        "raiser_name": raiser_name.strip(),
+        "status": "open",
+    }
+    result = client.table("requirements").insert(data).execute()
+    return result.data[0]["id"]
 
 
-def get_open_requirements() -> List[sqlite3.Row]:
+def get_open_requirements() -> List[dict]:
     """Return all requirements with status='open', newest first."""
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT * FROM requirements WHERE status='open' ORDER BY created_at DESC"
-    ).fetchall()
-    conn.close()
-    return rows
-
-
-def get_requirement_by_id(req_id: int) -> Optional[sqlite3.Row]:
-    """Fetch a single requirement by its id."""
-    conn = get_connection()
-    row = conn.execute(
-        "SELECT * FROM requirements WHERE id = ?", (req_id,)
-    ).fetchone()
-    conn.close()
-    return row
-
-
-def fulfill_requirement(req_id: int, fulfiller_name: str, proof_path: str) -> bool:
-    """Mark a requirement as fulfilled. Returns True if successful."""
-    conn = get_connection()
-    now = datetime.utcnow().isoformat()
-    cur = conn.execute(
-        "UPDATE requirements SET status='fulfilled', fulfiller_name=?, proof_path=?, fulfilled_at=? WHERE id=? AND status='open'",
-        (fulfiller_name.strip(), proof_path, now, req_id),
+    client = _get_client()
+    result = (
+        client.table("requirements")
+        .select("*")
+        .eq("status", "open")
+        .order("created_at", desc=True)
+        .execute()
     )
-    conn.commit()
-    updated = cur.rowcount > 0
-    conn.close()
-    return updated
+    return [_row_to_dict(r) for r in result.data]
 
 
-def get_fulfilled_requirements() -> List[sqlite3.Row]:
+def get_requirement_by_id(req_id: int) -> Optional[dict]:
+    """Fetch a single requirement by its id."""
+    client = _get_client()
+    result = (
+        client.table("requirements")
+        .select("*")
+        .eq("id", req_id)
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        return _row_to_dict(result.data[0])
+    return None
+
+
+def fulfill_requirement(
+    req_id: int, fulfiller_name: str, proof_path: str
+) -> bool:
+    """Mark a requirement as fulfilled. Returns True if successful."""
+    client = _get_client()
+    now = datetime.now(timezone.utc).isoformat()
+    result = (
+        client.table("requirements")
+        .update({
+            "status": "fulfilled",
+            "fulfiller_name": fulfiller_name.strip(),
+            "proof_path": proof_path,
+            "fulfilled_at": now,
+        })
+        .eq("id", req_id)
+        .eq("status", "open")
+        .execute()
+    )
+    return len(result.data) > 0
+
+
+def get_fulfilled_requirements() -> List[dict]:
     """Return all requirements with status='fulfilled', newest first."""
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT * FROM requirements WHERE status='fulfilled' ORDER BY fulfilled_at DESC"
-    ).fetchall()
-    conn.close()
-    return rows
+    client = _get_client()
+    result = (
+        client.table("requirements")
+        .select("*")
+        .eq("status", "fulfilled")
+        .order("fulfilled_at", desc=True)
+        .execute()
+    )
+    return [_row_to_dict(r) for r in result.data]

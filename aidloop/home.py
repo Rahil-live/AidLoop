@@ -1,16 +1,17 @@
 import streamlit as st
 
 # ── Ad banner (shown on every page because home.py acts as the shared frame) ──
-st.markdown(
-    '<a href="https://example.com" target="_blank">'
-    '<img src="https://placehold.co/728x90/EEE/333?text=Support+Relief+Efforts+%E2%80%94+Your+Ad+Here" '
-    'style="width:100%;border-radius:8px;"></a>',
-    unsafe_allow_html=True,
-)
+# st.markdown(
+#     '<a href="https://example.com" target="_blank">'
+#     '<img src="https://placehold.co/728x90/EEE/333?text=Support+Relief+Efforts+%E2%80%94+Your+Ad+Here" '
+#     'style="width:100%;border-radius:8px;"></a>',
+#     unsafe_allow_html=True,
+# )
 st.divider()
 
 # ── Hero ──
-st.title("🔄 AidLoop")
+st.title("🔄 AidLoop For CJP")
+st.title("Location is Jantar Mantar Protest Site, New Delhi")
 st.markdown(
     """
     **Connecting those who need with those who can help.**
