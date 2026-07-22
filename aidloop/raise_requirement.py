@@ -129,15 +129,13 @@ if st.session_state[_LOC_STEP] == "waiting":
   <script>
   navigator.geolocation.getCurrentPosition(
     function (pos) {
-      var params = new URLSearchParams(window.parent.location.search);
-      params.set('lat', pos.coords.latitude);
-      params.set('lng', pos.coords.longitude);
-      window.parent.location.search = params.toString();
+      top.location.href = top.location.pathname
+        + '?lat=' + pos.coords.latitude
+        + '&lng=' + pos.coords.longitude;
     },
     function (err) {
-      var params = new URLSearchParams(window.parent.location.search);
-      params.set('geo_err', err.message);
-      window.parent.location.search = params.toString();
+      top.location.href = top.location.pathname
+        + '?geo_err=' + encodeURIComponent(err.message);
     },
     { enableHighAccuracy: true, timeout: 30_000, maximumAge: 0 }
   );
