@@ -1,9 +1,6 @@
-import json
 import math
-import time
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from db import insert_requirement
 
@@ -77,57 +74,27 @@ with st.form("raise_form", clear_on_submit=True):
             st.session_state["raise_form_item"] = item_name
             st.session_state["raise_form_qty"] = quantity
             st.session_state["raise_form_name"] = raiser_name
+            # Clear any previous location from URL
+            st.query_params.clear()
             st.rerun()
 
 
 # ── Location verification (runs after form submit) ─────────────────────
 if st.session_state[_LOC_STEP] == "waiting":
 
-    st.info("📍 **Verifying your location…** Please allow location access when prompted by your browser.")
+    # Check if the geolocation JS has already set coordinates in the URL
+    url_lat = st.query_params.get("lat")
+    url_lng = st.query_params.get("lng")
+    url_error = st.query_params.get("geo_err")
 
-    LOCATION_HTML = """
-    <div id="status" style="text-align:center;padding:20px;font-size:16px;color:#555;">
-      Requesting your location…
-    </div>
-    <script>
-    navigator.geolocation.getCurrentPosition(
-      function (pos) {
-        window.parent.postMessage({
-          type: 'streamlit:setComponentValue',
-          value: JSON.stringify({
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-            error: null
-          })
-        }, '*');
-      },
-      function (err) {
-        window.parent.postMessage({
-          type: 'streamlit:setComponentValue',
-          value: JSON.stringify({
-            lat: null,
-            lng: null,
-            error: err.message
-          })
-        }, '*');
-      },
-      { enableHighAccuracy: true, timeout: 20_000, maximumAge: 0 }
-    );
-    </script>
-    """
-
-    location_data = components.html(LOCATION_HTML, height=60)
-
-    # components.html returns a DeltaGenerator on first call,
-    # and the actual value (string or None) on subsequent reruns.
-    if isinstance(location_data, str):
-        data = json.loads(location_data)
-        if data.get("error"):
-            st.session_state[_LOC_STEP] = "denied"
-            st.session_state[_LOC_ERR] = data["error"]
+    if url_lat is not None and url_lng is not None:
+        # Location received via URL params
+        try:
+            user_lat = float(url_lat)
+            user_lng = float(url_lng)
+        except (ValueError, TypeError):
+            st.error("Invalid location data received.")
         else:
-            user_lat = data["lat"]
-            user_lng = data["lng"]
             dist = _haversine_km(JANTAR_MANTAR_LAT, JANTAR_MANTAR_LNG, user_lat, user_lng)
             st.session_state[_LOC_LAT] = user_lat
             st.session_state[_LOC_LNG] = user_lng
@@ -140,21 +107,64 @@ if st.session_state[_LOC_STEP] == "waiting":
                     f"You are **{dist:.1f} km** from Jantar Mantar, "
                     f"which is outside the **{MAX_DISTANCE_KM} km** allowed range."
                 )
+        st.query_params.clear()
         st.rerun()
+
+    elif url_error is not None:
+        st.session_state[_LOC_STEP] = "denied"
+        st.session_state[_LOC_ERR] = url_error
+        st.query_params.clear()
+        st.rerun()
+
     else:
-        # ── No value yet — retry with a short delay ────────────────
-        retries = st.session_state.get("loc_retries", 0)
-        if retries < 15:
-            st.session_state["loc_retries"] = retries + 1
-            with st.spinner("Waiting for browser location…"):
-                time.sleep(1.5)
-            st.rerun()
-        else:
-            st.warning("Timed out waiting for location. Make sure you allow location access in your browser.")
-            if st.button("🔄 Try Again", use_container_width=True):
-                st.session_state[_LOC_STEP] = "idle"
-                st.session_state.pop("loc_retries", None)
-                st.rerun()
+        # ── Show the geolocation button + JS ──────────────────────────
+        st.info("📍 **Location verification required.** Allow location access to continue.")
+
+        st.markdown(
+            """
+        <button id="geo-btn" onclick="getLocation()"
+          style="
+            display:block;
+            margin:0 auto;
+            padding:12px 28px;
+            font-size:18px;
+            font-weight:600;
+            border:none;
+            border-radius:8px;
+            background:#2563eb;
+            color:white;
+            cursor:pointer;
+          ">
+          📍 Share My Location
+        </button>
+
+        <p id="geo-status" style="text-align:center;color:#888;margin-top:10px;">
+          Click the button above to verify your location.
+        </p>
+
+        <script>
+        function getLocation() {
+          document.getElementById('geo-status').innerText = 'Requesting location...';
+          navigator.geolocation.getCurrentPosition(
+            function (pos) {
+              // Store location in the URL so Streamlit can read it on next page load
+              var params = new URLSearchParams(window.location.search);
+              params.set('lat', pos.coords.latitude);
+              params.set('lng', pos.coords.longitude);
+              window.location.search = params.toString();
+            },
+            function (err) {
+              var params = new URLSearchParams(window.location.search);
+              params.set('geo_err', err.message);
+              window.location.search = params.toString();
+            },
+            { enableHighAccuracy: true, timeout: 20_000, maximumAge: 0 }
+          );
+        }
+        </script>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 # ── Location denied → show error ──────────────────────────────────────
@@ -179,6 +189,7 @@ if st.session_state[_LOC_STEP] == "denied":
     col1, col2 = st.columns(2)
     if col1.button("🔄 Try Again", use_container_width=True):
         st.session_state[_LOC_STEP] = "idle"
+        st.query_params.clear()
         st.rerun()
     if col2.button("🏠 Go Home"):
         st.switch_page("home.py")
