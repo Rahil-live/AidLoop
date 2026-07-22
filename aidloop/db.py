@@ -26,11 +26,33 @@ _SUPABASE: Optional[Client] = None
 
 
 def _get_client() -> Client:
-    """Return a cached Supabase client."""
+    """Return a cached Supabase client.
+
+    Credentials are resolved in this order:
+    1. ``st.secrets["supabase_url"]`` / ``st.secrets["supabase_key"]``
+       (works locally via ``.streamlit/secrets.toml`` and on Streamlit
+       Cloud via the dashboard Secrets editor).
+    2. ``SUPABASE_URL`` / ``SUPABASE_KEY`` environment variables
+       (useful for CI or other hosting).
+    """
     global _SUPABASE
     if _SUPABASE is None:
-        url = st.secrets["supabase_url"]
-        key = st.secrets["supabase_key"]
+        # Try st.secrets first (local dev + Streamlit Cloud dashboard)
+        try:
+            url = st.secrets["supabase_url"]
+            key = st.secrets["supabase_key"]
+        except KeyError:
+            # Fall back to environment variables
+            url = os.environ.get("SUPABASE_URL")
+            key = os.environ.get("SUPABASE_KEY")
+
+        if not url or not key:
+            raise RuntimeError(
+                "Supabase credentials not found. "
+                "Set them via Streamlit secrets (secrets.toml or dashboard) "
+                "or via SUPABASE_URL / SUPABASE_KEY environment variables."
+            )
+
         _SUPABASE = create_client(url, key)
     return _SUPABASE
 
