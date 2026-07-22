@@ -1,4 +1,3 @@
-import os
 import streamlit as st
 from db import get_open_requirements, get_requirement_by_id, fulfill_requirement
 from supabase import create_client
@@ -49,6 +48,13 @@ else:
             if req["raiser_name"]:
                 st.markdown(f"**Raised by:** {req['raiser_name']}")
             st.markdown(f"**Posted on:** {req['created_at']}")
+
+            # Show the raiser's proof photo for verification
+            raiser_proof = req.get("raiser_proof_path", "")
+            if raiser_proof:
+                st.markdown("---")
+                st.markdown("**📸 Raised with this proof photo:**")
+                st.image(raiser_proof, use_container_width=True)
 
         st.divider()
 

@@ -25,9 +25,14 @@ else:
                 st.markdown(f"**Fulfilled on:** {req['fulfilled_at']}")
 
             with col2:
+                # Raiser's proof photo
+                raiser_proof = req.get("raiser_proof_path", "")
+                if raiser_proof and raiser_proof.startswith("http"):
+                    st.image(raiser_proof, caption="📸 Proof photo (as raised)", use_container_width=True)
+
+                # Fulfiller's proof photo
                 proof_path = req["proof_path"]
                 if proof_path and proof_path.startswith("http"):
-                    # Supabase public URL
-                    st.image(proof_path, caption="Proof of delivery/payment", use_container_width=True)
-                else:
+                    st.image(proof_path, caption="📦 Proof of delivery/payment", use_container_width=True)
+                elif not raiser_proof:
                     st.warning("📷 Proof image not available.")

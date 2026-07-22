@@ -17,6 +17,7 @@ class Requirement(TypedDict):
     status: str
     fulfiller_name: str
     proof_path: str
+    raiser_proof_path: str
     created_at: str
     fulfilled_at: str | None
 
@@ -69,13 +70,14 @@ def init_db() -> None:
     pass
 
 
-def insert_requirement(item_name: str, quantity: str, raiser_name: str = "") -> int:
+def insert_requirement(item_name: str, quantity: str, raiser_name: str = "", raiser_proof_path: str = "") -> int:
     """Insert a new open requirement. Returns the inserted row id."""
     client = _get_client()
     data = {
         "item_name": item_name.strip(),
         "quantity": quantity.strip(),
         "raiser_name": raiser_name.strip(),
+        "raiser_proof_path": raiser_proof_path,
         "status": "open",
     }
     result = client.table("requirements").insert(data).execute()
