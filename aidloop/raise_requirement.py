@@ -1,5 +1,6 @@
 import json
 import math
+import time
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -89,38 +90,33 @@ if st.session_state[_LOC_STEP] == "waiting":
       Requesting your location…
     </div>
     <script>
-    function sendResult() {
-      navigator.geolocation.getCurrentPosition(
-        function (pos) {
-          window.parent.postMessage({
-            type: 'streamlit:setComponentValue',
-            value: JSON.stringify({
-              lat: pos.coords.latitude,
-              lng: pos.coords.longitude,
-              error: null
-            })
-          }, '*');
-        },
-        function (err) {
-          window.parent.postMessage({
-            type: 'streamlit:setComponentValue',
-            value: JSON.stringify({
-              lat: null,
-              lng: null,
-              error: err.message
-            })
-          }, '*');
-        },
-        { enableHighAccuracy: true, timeout: 15_000, maximumAge: 0 }
-      );
-    }
-    // Try sending the result repeatedly until Streamlit picks it up.
-    sendResult();
-    setInterval(sendResult, 2000);
+    navigator.geolocation.getCurrentPosition(
+      function (pos) {
+        window.parent.postMessage({
+          type: 'streamlit:setComponentValue',
+          value: JSON.stringify({
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            error: null
+          })
+        }, '*');
+      },
+      function (err) {
+        window.parent.postMessage({
+          type: 'streamlit:setComponentValue',
+          value: JSON.stringify({
+            lat: null,
+            lng: null,
+            error: err.message
+          })
+        }, '*');
+      },
+      { enableHighAccuracy: true, timeout: 20_000, maximumAge: 0 }
+    );
     </script>
     """
 
-    location_data = components.html(LOCATION_HTML, height=60, key="raise-location-finder")
+    location_data = components.html(LOCATION_HTML, height=60)
 
     # components.html returns a DeltaGenerator on first call,
     # and the actual value (string or None) on subsequent reruns.
@@ -145,6 +141,20 @@ if st.session_state[_LOC_STEP] == "waiting":
                     f"which is outside the **{MAX_DISTANCE_KM} km** allowed range."
                 )
         st.rerun()
+    else:
+        # ── No value yet — retry with a short delay ────────────────
+        retries = st.session_state.get("loc_retries", 0)
+        if retries < 15:
+            st.session_state["loc_retries"] = retries + 1
+            with st.spinner("Waiting for browser location…"):
+                time.sleep(1.5)
+            st.rerun()
+        else:
+            st.warning("Timed out waiting for location. Make sure you allow location access in your browser.")
+            if st.button("🔄 Try Again", use_container_width=True):
+                st.session_state[_LOC_STEP] = "idle"
+                st.session_state.pop("loc_retries", None)
+                st.rerun()
 
 
 # ── Location denied → show error ──────────────────────────────────────
