@@ -1,8 +1,12 @@
 import streamlit as st
 from db import get_open_requirements, get_requirement_by_id, fulfill_requirement
 from supabase import create_client
+from io import BytesIO
+from PIL import Image
 
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
+MAX_IMAGE_DIMENSION = 1920  # px – resize longest side to this
+COMPRESSION_QUALITY = 85    # JPEG quality 1–100
 ALLOWED_TYPES = {"png", "jpg", "jpeg"}
 STORAGE_BUCKET = "proof-image"
 
@@ -15,6 +19,26 @@ def get_supabase_storage():
     return client.storage.from_(STORAGE_BUCKET)
 
 
+def compress_image(file_bytes: bytes, max_dimension: int = MAX_IMAGE_DIMENSION, quality: int = COMPRESSION_QUALITY) -> bytes:
+    """
+    Open an image, resize the longest side to *max_dimension* (preserving aspect ratio),
+    and re-encode as JPEG at the given *quality*. Returns the compressed bytes.
+    """
+    img = Image.open(BytesIO(file_bytes))
+    # Convert RGBA / P-mode to RGB so we can save as JPEG
+    if img.mode in ("RGBA", "P"):
+        img = img.convert("RGB")
+    # Resize if the longest side exceeds max_dimension
+    w, h = img.size
+    if max(w, h) > max_dimension:
+        ratio = max_dimension / max(w, h)
+        new_size = (int(w * ratio), int(h * ratio))
+        img = img.resize(new_size, Image.LANCZOS)
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
 st.title("🤝 Fulfill a Requirement")
 st.markdown("Pick an open requirement, provide it off-app, and upload proof of delivery/payment.")
 
@@ -24,19 +48,24 @@ if not open_reqs:
     st.info("🎉 No open requirements right now. Check back later, or raise one yourself!")
     st.page_link("raise_requirement.py", label="🙋 Raise a Requirement")
 else:
-    # Build a display label for each requirement
+    # Build a display label for each requirement – clean & readable
     options = {
-            f"#{r['id']} — {r['item_name']} ({r['quantity']})"
-            + (f" — raised by {r['raiser_name']}" if r["raiser_name"] else "")
-            + f" — {r['created_at']}"
-            : r["id"]
-            for r in open_reqs
+        f"#{r['id']}  {r['item_name']}  (×{r['quantity']})"
+        + (f"  —  {r['raiser_name']}" if r["raiser_name"] else "")
+        : r["id"]
+        for r in open_reqs
     }
 
     selected_label = st.selectbox(
-        "Select a requirement to fulfill",
+        "Select a requirement to fulfill  👇",
         options=list(options.keys()),
+        index=None,
+        placeholder="Choose an open requirement…",
     )
+
+    if selected_label is None:
+        st.stop()
+
     selected_id = options[selected_label]
 
     req = get_requirement_by_id(selected_id)
@@ -90,15 +119,17 @@ else:
                     for err in errors:
                         st.error(err)
                 else:
-                    # Upload to Supabase Storage
+                    # Compress & upload to Supabase Storage
                     try:
                         storage = get_supabase_storage()
-                        # Use a unique path: req_id / timestamp_filename
-                        dest_filename = f"{selected_id}_{proof_file.name}"
+                        # Compress the image before uploading
+                        compressed_bytes = compress_image(proof_file.getvalue())
+                        # Save as .jpg regardless of original extension
+                        dest_filename = f"{selected_id}_{proof_file.name.rsplit('.', 1)[0]}.jpg"
                         storage.upload(
                             dest_filename,
-                            proof_file.getvalue(),
-                            {"content-type": proof_file.type or "image/png"},
+                            compressed_bytes,
+                            {"content-type": "image/jpeg"},
                         )
                         # Get the public URL
                         public_url = storage.get_public_url(dest_filename)
